@@ -37,6 +37,11 @@ coolify_api() {
     "${COOLIFY_BASE_URL%/}/api/v1${path}"
 }
 
+previous_tag="$(
+  coolify_api GET "/services/${COOLIFY_SERVICE_UUID}/envs" |
+    jq -r --arg key "$IMAGE_TAG_KEY" 'map(select(.key == $key)) | .[0].value // ""'
+)"
+
 env_payload="$(
   jq -cn \
     --arg key "$IMAGE_TAG_KEY" \
@@ -63,19 +68,40 @@ elif [[ "$applied_tag" != "$CABINET_IMAGE_IMMUTABLE_TAG" ]]; then
   exit 1
 fi
 
-coolify_api POST "/deploy?uuid=${COOLIFY_SERVICE_UUID}&force=true" >/dev/null
+coolify_api POST "/deploy?uuid=${COOLIFY_SERVICE_UUID}" >/dev/null
 echo "Деплой сервиса запущен, жду до ${DEPLOY_TIMEOUT_SECONDS}с"
 
-# Coolify успевает отдать ещё старый running:healthy до того, как остановит
-# контейнеры, поэтому сначала дожидаемся ухода из running, и только потом
-# считаем running:healthy результатом ЭТОГО деплоя. Если из running так и не
-# вышли за grace-период — не страшно, ниже всё равно сверяем запущенный образ.
-grace_deadline=$((SECONDS + 90))
+# Coolify отдаёт ещё старый running:healthy до того, как остановит контейнеры,
+# поэтому сначала дожидаемся ухода из running и только потом считаем
+# running:healthy результатом ЭТОГО деплоя.
+#
+# Если тег сменился, а сервис так и не перезапустился — деплой НЕ применился, и
+# это надо считать провалом. Именно так и было при заводке пайплайна: на хосте
+# не было docker login в приватный Nexus, pull падал с "no basic auth
+# credentials", Coolify переписывал .env, но контейнеры не пересоздавал, а
+# скрипт видел прежний running:healthy и отчитывался успехом.
+# Опрос частый: окно перезапуска бывает ~10с, на poll=10с его можно проспать.
+restarted=false
+grace_deadline=$((SECONDS + 120))
 while ((SECONDS < grace_deadline)); do
   status="$(coolify_api GET "/services/${COOLIFY_SERVICE_UUID}" | jq -er '.status')"
-  [[ "$status" != running:* ]] && break
-  sleep "$DEPLOY_POLL_SECONDS"
+  if [[ "$status" != running:* ]]; then
+    restarted=true
+    break
+  fi
+  sleep 3
 done
+
+if [[ "$restarted" != true ]]; then
+  if [[ "$previous_tag" == "$CABINET_IMAGE_IMMUTABLE_TAG" ]]; then
+    # Пере-прогон пайплайна на том же коммите: пересоздавать нечего.
+    echo "Тег не менялся (${CABINET_IMAGE_IMMUTABLE_TAG}), сервис не перезапускался"
+    exit 0
+  fi
+  echo "Тег сменился на ${CABINET_IMAGE_IMMUTABLE_TAG}, но сервис не перезапустился" >&2
+  echo "Coolify принял деплой и не применил его — проверьте docker login в Nexus на целевом сервере" >&2
+  exit 1
+fi
 
 deadline=$((SECONDS + DEPLOY_TIMEOUT_SECONDS))
 while ((SECONDS < deadline)); do
