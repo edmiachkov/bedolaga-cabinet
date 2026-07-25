@@ -1,0 +1,160 @@
+stages:
+  - validate
+  - release
+  - deploy
+
+default:
+  tags:
+    - prod-build
+  interruptible: true
+  timeout: 1h
+
+variables:
+  GIT_DEPTH: "1"
+  TRIVY_CACHE_DIR: "/var/lib/gitlab-runner/cache/trivy"
+  IMAGE_REPOSITORY: "bedolaga-cabinet"
+  CACHE_REPOSITORY: "bedolaga-cabinet-buildcache"
+  # Не секрет: без токена из Vault бесполезен. Здесь, а не в Vault, потому что
+  # у каждого приложения он свой, а путь с токеном — общий на весь CI.
+  COOLIFY_SERVICE_UUID: "i6apwzkyri2qtjd5ao0b06tu"
+  # Build-time ARG без дефолта в апстримном Dockerfile. Публичный
+  # ghcr.io-образ собран с пустым значением, из-за чего deep-link авторизация
+  # через Telegram не работает — поэтому свой образ, а не чужой.
+  VITE_TELEGRAM_BOT_USERNAME: "vpn_edde_bot"
+
+workflow:
+  auto_cancel:
+    on_new_commit: interruptible
+  rules:
+    - if: '$CI_PIPELINE_SOURCE == "push" && $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH'
+    - if: '$CI_PIPELINE_SOURCE == "web" && $CI_COMMIT_REF_PROTECTED == "true"'
+    - if: '$CI_PIPELINE_SOURCE == "api" && $CI_COMMIT_REF_PROTECTED == "true"'
+    - when: never
+
+validate:
+  stage: validate
+  script:
+    - git diff --check
+    - shellcheck .ci/load-nexus-credentials.sh
+    - shellcheck .ci/load-coolify-credentials.sh
+    - shellcheck .ci/deploy-coolify.sh
+    - test -s Dockerfile
+    # Апстрим обязан продолжать принимать этот ARG: без него образ соберётся
+    # молча, но с пустым botname и сломанным deep-link.
+    - grep -q 'ARG VITE_TELEGRAM_BOT_USERNAME' Dockerfile
+
+build_scan_publish:
+  stage: release
+  resource_group: bedolaga-cabinet-release
+  id_tokens:
+    VAULT_ID_TOKEN:
+      aud: https://vault.lab.oh-my-devops.space
+  before_script:
+    - source .ci/load-nexus-credentials.sh
+  script:
+    - |
+      set -euo pipefail
+
+      export IMAGE_TAG="sha-${CI_COMMIT_SHA}"
+      export STAGING_IMAGE="${NEXUS_STAGING_REGISTRY}/${IMAGE_REPOSITORY}:${IMAGE_TAG}"
+      export PROD_SHA_IMAGE="${NEXUS_PROD_REGISTRY}/${IMAGE_REPOSITORY}:${IMAGE_TAG}"
+      export PROD_CHANNEL_IMAGE="${NEXUS_PROD_REGISTRY}/${IMAGE_REPOSITORY}:${CI_DEFAULT_BRANCH}"
+      export CACHE_IMAGE="${NEXUS_CACHE_REGISTRY}/${CACHE_REPOSITORY}:${CI_DEFAULT_BRANCH}"
+      export XDG_RUNTIME_DIR="/tmp/buildkit-${CI_PROJECT_ID}-${CI_JOB_ID}"
+      install -d -m 0700 "$XDG_RUNTIME_DIR"
+      _cleanup_buildkit_runtime() {
+        rmdir -- "$XDG_RUNTIME_DIR" 2>/dev/null || true
+      }
+      trap '_cleanup_buildkit_runtime; _cleanup_nexus_credentials' EXIT
+      export BUILDKIT_ROOT="/var/lib/gitlab-runner/buildkit/project-${CI_PROJECT_ID}"
+      export BUILDKITD_FLAGS="--config /etc/buildkit/buildkitd.toml --oci-worker-no-process-sandbox --oci-worker-snapshotter=native --root ${BUILDKIT_ROOT}"
+
+      /usr/local/bin/buildctl-daemonless.sh build \
+        --frontend dockerfile.v0 \
+        --local context=. \
+        --local dockerfile=. \
+        --opt filename=Dockerfile \
+        --opt platform=linux/amd64 \
+        --opt "build-arg:VITE_TELEGRAM_BOT_USERNAME=${VITE_TELEGRAM_BOT_USERNAME}" \
+        --import-cache "type=registry,ref=${CACHE_IMAGE}" \
+        --export-cache "type=registry,ref=${CACHE_IMAGE},mode=max,image-manifest=true,oci-mediatypes=true" \
+        --output "type=image,name=${STAGING_IMAGE},push=true" \
+        --metadata-file build-metadata.json
+
+      trivy image \
+        --cache-dir "$TRIVY_CACHE_DIR" \
+        --format cyclonedx \
+        --output sbom.cdx.json \
+        "$STAGING_IMAGE"
+
+      trivy image \
+        --cache-dir "$TRIVY_CACHE_DIR" \
+        --severity CRITICAL \
+        --ignore-unfixed \
+        --exit-code 1 \
+        "$STAGING_IMAGE"
+
+      staging_digest="$(crane digest "$STAGING_IMAGE")"
+      if existing_digest="$(crane digest "$PROD_SHA_IMAGE" 2>/dev/null)"; then
+        if [[ "$existing_digest" != "$staging_digest" ]]; then
+          echo "immutable tag ${PROD_SHA_IMAGE} already points to another digest" >&2
+          exit 1
+        fi
+      else
+        crane copy "$STAGING_IMAGE" "$PROD_SHA_IMAGE"
+      fi
+
+      prod_digest="$(crane digest "$PROD_SHA_IMAGE")"
+      if [[ "$prod_digest" != "$staging_digest" ]]; then
+        echo "production digest verification failed" >&2
+        exit 1
+      fi
+
+      deployed_tag="$IMAGE_TAG"
+      if [[ "$CI_COMMIT_BRANCH" == "$CI_DEFAULT_BRANCH" ]]; then
+        crane copy "$PROD_SHA_IMAGE" "$PROD_CHANNEL_IMAGE"
+        channel_digest="$(crane digest "$PROD_CHANNEL_IMAGE")"
+        if [[ "$channel_digest" != "$prod_digest" ]]; then
+          echo "${CI_DEFAULT_BRANCH} channel digest verification failed" >&2
+          exit 1
+        fi
+        deployed_tag="$CI_DEFAULT_BRANCH"
+      fi
+
+      {
+        printf 'CABINET_IMAGE=%s/%s\n' "$NEXUS_PROD_REGISTRY" "$IMAGE_REPOSITORY"
+        printf 'CABINET_IMAGE_TAG=%s\n' "$deployed_tag"
+        printf 'CABINET_IMAGE_IMMUTABLE_TAG=%s\n' "$IMAGE_TAG"
+        printf 'CABINET_IMAGE_DIGEST=%s\n' "$prod_digest"
+      } > image.env
+  artifacts:
+    when: always
+    expire_in: 14 days
+    paths:
+      - build-metadata.json
+      - sbom.cdx.json
+      - image.env
+    reports:
+      dotenv: image.env
+
+deploy_production:
+  stage: deploy
+  # Деплой, прерванный на середине новым коммитом, оставляет прод в неизвестном
+  # состоянии — это дороже лишней минуты пайплайна.
+  interruptible: false
+  resource_group: bedolaga-cabinet-deploy
+  environment:
+    name: production
+    url: https://b1.iamem.store
+  needs:
+    - job: build_scan_publish
+      artifacts: true
+  rules:
+    - if: '$CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH'
+  id_tokens:
+    VAULT_ID_TOKEN:
+      aud: https://vault.lab.oh-my-devops.space
+  before_script:
+    - source .ci/load-coolify-credentials.sh
+  script:
+    - .ci/deploy-coolify.sh
