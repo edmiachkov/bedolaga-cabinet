@@ -16,8 +16,8 @@
 
 set -euo pipefail
 
-: "${COOLIFY_BASE_URL:?load .ci/load-coolify-credentials.sh first}"
-: "${COOLIFY_API_TOKEN:?load .ci/load-coolify-credentials.sh first}"
+: "${COOLIFY_BASE_URL:?задаётся переменной джобы deploy_production}"
+: "${COOLIFY_API_TOKEN:?приезжает из Vault через secrets: — см. deploy_production}"
 : "${COOLIFY_SERVICE_UUID:?set it in .gitlab-ci.yml variables — это не секрет}"
 : "${CABINET_IMAGE_IMMUTABLE_TAG:?build_scan_publish must pass image.env}"
 
