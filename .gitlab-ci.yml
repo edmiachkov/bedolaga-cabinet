@@ -1,17 +1,26 @@
 include:
-  - component: $CI_SERVER_FQDN/my-projects/ci-components/security@main
+  - component: $CI_SERVER_FQDN/my-projects/ci-components/security@v1
     inputs:
       stage: test
       tags: [prod-docker]
-  - component: $CI_SERVER_FQDN/my-projects/ci-components/ci-hygiene@main
+  - component: $CI_SERVER_FQDN/my-projects/ci-components/ci-hygiene@v1
     inputs:
       stage: lint
       tags: [prod-docker]
 
+  # Дополняет свой Trivy-гейт, а не заменяет: гейт падает на CRITICAL до
+  # публикации, а этот кладёт находки в Vulnerability Report, где у них
+  # есть история, dismiss с причиной и vulnerability-allowlist.yml.
+  - component: $CI_SERVER_FQDN/my-projects/ci-components/container-scanning@v1
+    inputs:
+      stage: scan
+      repositories: [bedolaga-cabinet]
+      needs_job: build_scan_publish
 stages:
   - lint
   - test
   - release
+  - scan
   - deploy
 
 default:
