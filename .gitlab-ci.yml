@@ -132,7 +132,6 @@ build_scan_publish:
             --arg cache "$NEXUS_CACHE_REGISTRY" \
         '{auths: {($prod): {auth: $auth}, ($staging): {auth: $auth}, ($cache): {auth: $auth}}}' \
         >"${DOCKER_CONFIG}/config.json"
-      trap 'rm -f -- "${DOCKER_CONFIG}/config.json"' EXIT
 
       export IMAGE_TAG="sha-${CI_COMMIT_SHA}"
       export STAGING_IMAGE="${NEXUS_STAGING_REGISTRY}/${IMAGE_REPOSITORY}:${IMAGE_TAG}"
@@ -144,9 +143,18 @@ build_scan_publish:
       _cleanup_buildkit_runtime() {
         rmdir -- "$XDG_RUNTIME_DIR" 2>/dev/null || true
       }
-      trap '_cleanup_buildkit_runtime; _cleanup_nexus_credentials' EXIT
+      # Одна ловушка на всё: второй `trap … EXIT` перезаписывает первый,
+      # поэтому очистка docker config живёт здесь же, а не отдельной строкой.
+      # `_cleanup_nexus_credentials` убран — он приходил из .ci/load-nexus-
+      # credentials.sh, которого больше нет, и джоба падала на выходе с
+      # exit 127 УЖЕ ПОСЛЕ успешной публикации образа.
+      _cleanup_all() {
+        _cleanup_buildkit_runtime
+        rm -f -- "${DOCKER_CONFIG}/config.json"
+      }
+      trap _cleanup_all EXIT
       export BUILDKIT_ROOT="/var/lib/gitlab-runner/buildkit/project-${CI_PROJECT_ID}"
-      export BUILDKITD_FLAGS="--config /etc/buildkit/buildkitd.toml --oci-worker-no-process-sandbox --oci-worker-snapshotter=native --root ${BUILDKIT_ROOT}"
+      export BUILDKITD_FLAGS="--config /etc/buildkit/buildkitd.toml --oci-worker-no-process-sandbox --oci-worker-snapshotter=overlayfs --root ${BUILDKIT_ROOT}"
 
       /usr/local/bin/buildctl-daemonless.sh build \
         --frontend dockerfile.v0 \
