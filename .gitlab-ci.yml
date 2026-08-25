@@ -1,17 +1,26 @@
 include:
-  - component: $CI_SERVER_FQDN/my-projects/ci-components/security@main
+  - component: $CI_SERVER_FQDN/my-projects/ci-components/security@v1
     inputs:
       stage: test
       tags: [prod-docker]
-  - component: $CI_SERVER_FQDN/my-projects/ci-components/ci-hygiene@main
+  - component: $CI_SERVER_FQDN/my-projects/ci-components/ci-hygiene@v1
     inputs:
       stage: lint
       tags: [prod-docker]
 
+  # Дополняет свой Trivy-гейт, а не заменяет: гейт падает на CRITICAL до
+  # публикации, а этот кладёт находки в Vulnerability Report, где у них
+  # есть история, dismiss с причиной и vulnerability-allowlist.yml.
+  - component: $CI_SERVER_FQDN/my-projects/ci-components/container-scanning@v1
+    inputs:
+      stage: scan
+      repositories: [bedolaga-cabinet]
+      needs_job: build_scan_publish
 stages:
   - lint
   - test
   - release
+  - scan
   - deploy
 
 default:
@@ -37,6 +46,14 @@ workflow:
   auto_cancel:
     on_new_commit: interruptible
   rules:
+    # MR-пайплайн: без него approval policy не видит отчётов сканеров и
+    # блокирует мёрдж как security_policy_violations — при этом «упавший»
+    # пайплайн MR не содержит ни одной джобы, что уводит диагностику не туда.
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
+    # Ветка, у которой уже открыт MR, своего пайплайна не получает: иначе
+    # на каждый коммит их будет два.
+    - if: '$CI_COMMIT_BRANCH && $CI_OPEN_MERGE_REQUESTS'
+      when: never
     - if: '$CI_PIPELINE_SOURCE == "push" && $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH'
     # Ветки тоже проверяются: без этого правила анализаторы безопасности
     # увидели бы код только после мёрджа, когда чинить поздно.
