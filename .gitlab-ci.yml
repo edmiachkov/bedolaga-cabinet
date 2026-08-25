@@ -46,6 +46,14 @@ workflow:
   auto_cancel:
     on_new_commit: interruptible
   rules:
+    # MR-пайплайн: без него approval policy не видит отчётов сканеров и
+    # блокирует мёрдж как security_policy_violations — при этом «упавший»
+    # пайплайн MR не содержит ни одной джобы, что уводит диагностику не туда.
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
+    # Ветка, у которой уже открыт MR, своего пайплайна не получает: иначе
+    # на каждый коммит их будет два.
+    - if: '$CI_COMMIT_BRANCH && $CI_OPEN_MERGE_REQUESTS'
+      when: never
     - if: '$CI_PIPELINE_SOURCE == "push" && $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH'
     # Ветки тоже проверяются: без этого правила анализаторы безопасности
     # увидели бы код только после мёрджа, когда чинить поздно.
