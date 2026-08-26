@@ -1,9 +1,17 @@
 include:
-  - component: $CI_SERVER_FQDN/my-projects/ci-components/security@v1.1
+  - component: $CI_SERVER_FQDN/my-projects/ci-components/security@v1.2
     inputs:
       stage: test
       tags: [prod-docker]
-  - component: $CI_SERVER_FQDN/my-projects/ci-components/ci-hygiene@v1.1
+  - component: $CI_SERVER_FQDN/my-projects/ci-components/ci-hygiene@v1.2
+    inputs:
+      stage: lint
+      tags: [prod-docker]
+  # hadolint по Dockerfile и shellcheck по всем *.sh. Своя lint:shell убрана:
+  # компонентная делает то же самое шире (весь репозиторий, а не .ci/*.sh),
+  # а одноимённая локальная джоба не заменяет пришедшую из компонента, а
+  # сливается с ней — получился бы гибрид из чужих rules и своего script.
+  - component: $CI_SERVER_FQDN/my-projects/ci-components/lint@v1.2
     inputs:
       stage: lint
       tags: [prod-docker]
@@ -11,7 +19,7 @@ include:
   # Дополняет свой Trivy-гейт, а не заменяет: гейт падает на CRITICAL до
   # публикации, а этот кладёт находки в Vulnerability Report, где у них
   # есть история, dismiss с причиной и vulnerability-allowlist.yml.
-  - component: $CI_SERVER_FQDN/my-projects/ci-components/container-scanning@v1.1
+  - component: $CI_SERVER_FQDN/my-projects/ci-components/container-scanning@v1.2
     inputs:
       stage: scan
       repositories: [bedolaga-cabinet]
@@ -61,14 +69,6 @@ workflow:
     - if: '$CI_PIPELINE_SOURCE == "web" && $CI_COMMIT_REF_PROTECTED == "true"'
     - if: '$CI_PIPELINE_SOURCE == "api" && $CI_COMMIT_REF_PROTECTED == "true"'
     - when: never
-
-lint:shell:
-  stage: lint
-  tags:
-    - prod-docker
-  image: koalaman/shellcheck-alpine:v0.10.0
-  script:
-    - shellcheck .ci/*.sh
 
 lint:dockerfile-arg:
   stage: lint
