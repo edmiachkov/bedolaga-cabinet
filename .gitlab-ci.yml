@@ -1,9 +1,9 @@
 include:
-  - component: $CI_SERVER_FQDN/my-projects/ci/ci-components/security@v1.6
+  - component: $CI_SERVER_FQDN/my-projects/ci/ci-components/security@v1.7
     inputs:
       stage: test
       tags: [prod-docker]
-  - component: $CI_SERVER_FQDN/my-projects/ci/ci-components/ci-hygiene@v1.6
+  - component: $CI_SERVER_FQDN/my-projects/ci/ci-components/ci-hygiene@v1.7
     inputs:
       stage: lint
       tags: [prod-docker]
@@ -11,7 +11,7 @@ include:
   # компонентная делает то же самое шире (весь репозиторий, а не .ci/*.sh),
   # а одноимённая локальная джоба не заменяет пришедшую из компонента, а
   # сливается с ней — получился бы гибрид из чужих rules и своего script.
-  - component: $CI_SERVER_FQDN/my-projects/ci/ci-components/lint@v1.6
+  - component: $CI_SERVER_FQDN/my-projects/ci/ci-components/lint@v1.7
     inputs:
       stage: lint
       tags: [prod-docker]
@@ -19,7 +19,7 @@ include:
   # Дополняет свой Trivy-гейт, а не заменяет: гейт падает на CRITICAL до
   # публикации, а этот кладёт находки в Vulnerability Report, где у них
   # есть история, dismiss с причиной и vulnerability-allowlist.yml.
-  - component: $CI_SERVER_FQDN/my-projects/ci/ci-components/container-scanning@v1.6
+  - component: $CI_SERVER_FQDN/my-projects/ci/ci-components/container-scanning@v1.7
     inputs:
       stage: scan
       repositories: [bedolaga-cabinet]
