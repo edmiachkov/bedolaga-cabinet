@@ -36,6 +36,13 @@ FROM nginx:alpine
 COPY --from=builder /app/dist /usr/share/nginx/html
 COPY nginx.conf /etc/nginx/conf.d/default.conf
 
+# Ревизия сборки отдаётся статикой: у чисто серверной правки имя бандла не
+# меняется, и снаружи факт выката иначе не проверить. Джоба verify_production
+# в CI сверяет это поле с CI_COMMIT_SHA — без него «деплой прошёл» опирается
+# только на слово Coolify, а оно у нас трижды оказывалось неверным.
+ARG GIT_SHA=unknown
+RUN printf '{"revision":"%s"}\n' "$GIT_SHA" > /usr/share/nginx/html/version.json
+
 # Expose port
 EXPOSE 80
 
