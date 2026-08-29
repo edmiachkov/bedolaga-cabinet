@@ -1,9 +1,9 @@
 include:
-  - component: $CI_SERVER_FQDN/my-projects/ci/ci-components/security@v1.22
+  - component: $CI_SERVER_FQDN/my-projects/ci/ci-components/security@v1.23
     inputs:
       stage: test
       tags: [prod-docker]
-  - component: $CI_SERVER_FQDN/my-projects/ci/ci-components/ci-hygiene@v1.22
+  - component: $CI_SERVER_FQDN/my-projects/ci/ci-components/ci-hygiene@v1.23
     inputs:
       stage: lint
       tags: [prod-docker]
@@ -11,7 +11,7 @@ include:
   # компонентная делает то же самое шире (весь репозиторий, а не .ci/*.sh),
   # а одноимённая локальная джоба не заменяет пришедшую из компонента, а
   # сливается с ней — получился бы гибрид из чужих rules и своего script.
-  - component: $CI_SERVER_FQDN/my-projects/ci/ci-components/lint@v1.22
+  - component: $CI_SERVER_FQDN/my-projects/ci/ci-components/lint@v1.23
     inputs:
       stage: lint
       tags: [prod-docker]
@@ -19,7 +19,7 @@ include:
   # Дополняет свой Trivy-гейт, а не заменяет: гейт падает на CRITICAL до
   # публикации, а этот кладёт находки в Vulnerability Report, где у них
   # есть история, dismiss с причиной и vulnerability-allowlist.yml.
-  - component: $CI_SERVER_FQDN/my-projects/ci/ci-components/container-scanning@v1.22
+  - component: $CI_SERVER_FQDN/my-projects/ci/ci-components/container-scanning@v1.23
     inputs:
       stage: scan
       repositories: [bedolaga-cabinet]
@@ -27,14 +27,14 @@ include:
   # Собирает образ в merge request и НЕ публикует: штатная сборка ограничена
   # default-веткой, поэтому Dockerfile до сих пор проверялся только после
   # мёрджа. Базы (node:20-alpine, nginx:alpine) публичные — кредов не нужно.
-  - component: $CI_SERVER_FQDN/my-projects/ci/ci-components/build-mr@v1.22
+  - component: $CI_SERVER_FQDN/my-projects/ci/ci-components/build-mr@v1.23
     inputs:
       stage: test
       dockerfiles: [Dockerfile]
   # Доказывает, что в проде именно этот коммит: ревизия запекается в образ
   # (ARG GIT_SHA) и отдаётся статикой по /version.json. Слово Coolify об
   # успешном деплое этого не доказывает — трижды оказывалось неверным.
-  - component: $CI_SERVER_FQDN/my-projects/ci/ci-components/verify-deploy@v1.22
+  - component: $CI_SERVER_FQDN/my-projects/ci/ci-components/verify-deploy@v1.23
     inputs:
       stage: deploy
       tags: [prod-docker]
