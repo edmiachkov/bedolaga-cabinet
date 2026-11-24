@@ -1,6 +1,7 @@
 # Docker Compose для локальной разработки/тестирования
 # Для production используйте готовые образы или настройте Caddy/Nginx
 # См. README.md раздел "Настройка прокси для production"
+# nginx.conf образа проксирует /api/ на сервис `bot:8080`: без него в сети nginx не стартует.
 
 services:
   cabinet-frontend:
